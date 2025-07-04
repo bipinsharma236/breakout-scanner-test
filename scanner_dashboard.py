@@ -4,88 +4,92 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-# --- SETUP ---
-st.set_page_config(page_title="Market Breakout Scanner", layout="wide")
-st.title("📈 S&P 500 & NASDAQ Breakout Scanner")
-st.markdown(f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+# Setup
+st.set_page_config(page_title="High-Probability Setup Scanner", layout="wide")
+st.title("🚀 Profit Setup Scanner (Daily)")
 
-# --- DATA SOURCES ---
 @st.cache_data
 def load_tickers(index):
-    if index == "S&P 500":
-        table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
-        return table['Symbol'].tolist()
-    elif index == "NASDAQ 100":
-        table = pd.read_html("https://en.wikipedia.org/wiki/NASDAQ-100")[4]
-        return table['Ticker'].tolist()
-    else:
-        return []
+    sp500 = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
+    nasdaq = pd.read_html("https://en.wikipedia.org/wiki/NASDAQ-100")[4]
+    return {
+        "S&P 500": sp500['Symbol'].tolist(),
+        "NASDAQ 100": nasdaq['Ticker'].tolist()
+    }
 
-# --- USER SELECTION ---
-index_choice = st.selectbox("Select Index to Scan", ["S&P 500", "NASDAQ 100", "Custom"])
+# User selection
+index_data = load_tickers("index")
+index_choice = st.selectbox("Select Index", ["S&P 500", "NASDAQ 100", "Custom"])
 if index_choice == "Custom":
-    custom_input = st.text_input("Enter tickers separated by commas", "SPY, QQQ, TSLA, AAPL")
+    custom_input = st.text_input("Enter custom tickers:", "SPY, QQQ, TSLA, AAPL")
     tickers = [x.strip().upper() for x in custom_input.split(",")]
 else:
-    tickers = load_tickers(index_choice)
+    tickers = index_data[index_choice]
 
-# --- SCANNER LOGIC ---
+selected_setups = st.multiselect(
+    "Select setup types to scan for:",
+    ["EMA Trend", "RSI Reversal", "Inside Day", "Volume Spike"],
+    default=["EMA Trend"]
+)
+
+# Scanner logic
 def analyze_ticker(ticker):
     try:
-        df = yf.download(ticker, interval='1d', period='6mo', progress=False)
+        df = yf.download(ticker, interval='1d', period='3mo', progress=False)
         if df.empty or len(df) < 21:
             return None, None
 
         df['EMA_8'] = df['Close'].ewm(span=8).mean()
         df['EMA_21'] = df['Close'].ewm(span=21).mean()
-        df['BB_Upper'] = df['Close'].rolling(20).mean() + 2 * df['Close'].rolling(20).std()
+        df['RSI'] = df['Close'].rolling(14).apply(lambda x: pd.Series(x).pct_change().mean() / pd.Series(x).pct_change().std(), raw=False)
+        df['High_Lag1'] = df['High'].shift(1)
+        df['Low_Lag1'] = df['Low'].shift(1)
+        df['Range'] = df['High'] - df['Low']
+        df['Volume_Avg'] = df['Volume'].rolling(10).mean()
 
-        last_close = df['Close'].iloc[-1]
-        last_bb = df['BB_Upper'].iloc[-1]
-        last_ema8 = df['EMA_8'].iloc[-1]
-        last_ema21 = df['EMA_21'].iloc[-1]
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
 
-        if pd.notna(last_bb) and pd.notna(last_ema8) and pd.notna(last_ema21):
-            breakout = (last_close > last_bb) and (last_ema8 > last_ema21)
-        else:
-            breakout = False
+        signals = []
 
-        data = {
-            'Close': round(last_close, 2),
-            'EMA_8': round(last_ema8, 2),
-            'EMA_21': round(last_ema21, 2),
-            'BB_Upper': round(last_bb, 2),
-            'Breakout Signal': '✅ YES' if breakout else '❌ NO'
-        }
+        if "EMA Trend" in selected_setups:
+            if last['EMA_8'] > last['EMA_21'] and last['Close'] > last['EMA_8']:
+                signals.append("📈 EMA Trend")
 
-        return df, data
+        if "RSI Reversal" in selected_setups:
+            if last['RSI'] < -1.5 and last['Close'] > prev['Close']:
+                signals.append("🔄 RSI Reversal")
+
+        if "Inside Day" in selected_setups:
+            if last['High'] < prev['High'] and last['Low'] > prev['Low']:
+                signals.append("🔍 Inside Day")
+
+        if "Volume Spike" in selected_setups:
+            if last['Volume'] > 2 * last['Volume_Avg']:
+                signals.append("💣 Volume Spike")
+
+        return df, signals if signals else None
     except:
         return None, None
 
-# --- SCAN & DISPLAY ---
-breakout_tickers = []
+# Run scan
+found_setups = []
 
-for ticker in st.spinner("Scanning tickers..."), tickers:
-    df, result = analyze_ticker(ticker)
-    if df is None:
-        continue
-    if result["Breakout Signal"] == "✅ YES":
-        breakout_tickers.append((ticker, result, df))
+with st.spinner("Scanning tickers..."):
+    for ticker in tickers:
+        df, signals = analyze_ticker(ticker)
+        if signals:
+            found_setups.append((ticker, signals, df))
 
-# --- RESULTS ---
-st.subheader(f"📊 Breakout Results — {len(breakout_tickers)} tickers found")
-for ticker, result, df in breakout_tickers:
-    st.markdown(f"### {ticker} — {result['Breakout Signal']}")
-    st.write(result)
+# Show results
+st.subheader(f"✅ Setups Found: {len(found_setups)}")
 
+for ticker, signals, df in found_setups:
+    st.markdown(f"### {ticker} — {' | '.join(signals)}")
     fig, ax = plt.subplots(figsize=(10, 3))
     ax.plot(df['Close'], label='Price', linewidth=1.5)
     ax.plot(df['EMA_8'], label='EMA 8')
     ax.plot(df['EMA_21'], label='EMA 21')
-    ax.plot(df['BB_Upper'], label='Upper BB', linestyle=':')
-    ax.set_title(f"{ticker} — Daily Chart")
+    ax.set_title(f"{ticker} — Daily")
     ax.legend()
     st.pyplot(fig)
-
-if not breakout_tickers:
-    st.info("No breakout setups detected in current list.")
