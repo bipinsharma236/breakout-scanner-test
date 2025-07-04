@@ -35,16 +35,13 @@ selected_setups = st.multiselect(
 # Scanner logic
 def analyze_ticker(ticker):
     try:
-        df = yf.download(ticker, interval='1d', period='3mo', progress=False)
+        df = yf.download(ticker, interval='1d', period='6mo', progress=False)
         if df.empty or len(df) < 21:
             return None, None
 
         df['EMA_8'] = df['Close'].ewm(span=8).mean()
         df['EMA_21'] = df['Close'].ewm(span=21).mean()
-        df['RSI'] = df['Close'].rolling(14).apply(lambda x: pd.Series(x).pct_change().mean() / pd.Series(x).pct_change().std(), raw=False)
-        df['High_Lag1'] = df['High'].shift(1)
-        df['Low_Lag1'] = df['Low'].shift(1)
-        df['Range'] = df['High'] - df['Low']
+        df['RSI'] = df['Close'].rolling(window=14).apply(lambda x: talib.RSI(x, timeperiod=14)[-1] if len(x) >= 14 else None)
         df['Volume_Avg'] = df['Volume'].rolling(10).mean()
 
         last = df.iloc[-1]
@@ -52,24 +49,28 @@ def analyze_ticker(ticker):
 
         signals = []
 
-        if "EMA Trend" in selected_setups:
-            if last['EMA_8'] > last['EMA_21'] and last['Close'] > last['EMA_8']:
-                signals.append("📈 EMA Trend")
+        # 📈 EMA Trend
+        if (
+            last['EMA_8'] > last['EMA_21'] and
+            last['EMA_21'] > df['EMA_21'].iloc[-3]  # Rising EMA21
+        ):
+            signals.append("📈 EMA Trend")
 
-        if "RSI Reversal" in selected_setups:
-            if last['RSI'] < -1.5 and last['Close'] > prev['Close']:
-                signals.append("🔄 RSI Reversal")
+        # 🔄 RSI Reversal
+        if last['RSI'] is not None and last['RSI'] < 35:
+            signals.append("🔄 RSI Oversold")
 
-        if "Inside Day" in selected_setups:
-            if last['High'] < prev['High'] and last['Low'] > prev['Low']:
-                signals.append("🔍 Inside Day")
+        # 🔍 Inside Day
+        if last['High'] < prev['High'] and last['Low'] > prev['Low']:
+            signals.append("🔍 Inside Day")
 
-        if "Volume Spike" in selected_setups:
-            if last['Volume'] > 2 * last['Volume_Avg']:
-                signals.append("💣 Volume Spike")
+        # 💣 Volume Spike
+        if last['Volume'] > 1.5 * last['Volume_Avg']:
+            signals.append("💣 Volume Spike")
 
         return df, signals if signals else None
-    except:
+
+    except Exception as e:
         return None, None
 
 # Run scan
